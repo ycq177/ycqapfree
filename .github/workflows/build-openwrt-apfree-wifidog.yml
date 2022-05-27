@@ -1,0 +1,118 @@
+#=================================================
+# https://github.com/P3TERX/Actions-OpenWrt
+# Description: Build OpenWrt with apfree-wifidog using GitHub Actions
+# Lisence: MIT
+# Author: P3TERX
+# Contributed: digitcloud
+# Modified: liudf0716
+#=================================================
+
+name: Build OpenWrt with apfree-wifidog
+
+# Controls when the action will run. 
+on:
+  # Triggers the workflow on push or pull request events but only for the main branch
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+    inputs:
+      openwrtBranch:
+        description: 'input openwrt branch'
+        required: true
+        default: 'openwrt-21.02'
+      configFile:
+        description: 'input openwrt config file name'
+        required: true
+        default: 'config.x86.2102'
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt.git
+  FEEDS_CONF: feeds.conf.default
+  APFREEWIFIDOG: apfreewifidog.sh
+  UPLOAD_BIN_DIR: true
+  UPLOAD_FIRMWARE: true
+  UPLOAD_COWTRANSFER: true
+  UPLOAD_WETRANSFER: false
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: clone source code
+      run: |
+        git clone  $REPO_URL -b ${{ github.event.inputs.openwrtBranch }} openwrt
+
+    - name: update feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+    - name: install feeds
+      run: cd openwrt && ./scripts/feeds install -a
+
+    - name: set apfree-wifidog version to master
+      run: |
+        [ -e ${{ github.event.inputs.configFile }} ] && mv ${{ github.event.inputs.configFile }} openwrt/.config
+        cd openwrt 
+        git branch -a
+        cp ../apfree-wifidog/Makefile  package/feeds/packages/apfree-wifidog/Makefile
+        cat package/feeds/packages/apfree-wifidog/Makefile 
+    
+    - name: download package
+      run: |
+        cd openwrt
+        make download -j4
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+   
+    - name: Compile Tools
+      id: tools
+      run: |
+        cd openwrt
+        make tools/compile -j4
+          
+    - name: Compile Toolchain
+      id: toolchain
+      run: |
+        cd openwrt
+        make toolchain/compile -j4
+    
+    - name: Compile linux kernel
+      run: |
+        cd openwrt
+        make target/linux/compile
+    
+    - name: Compile ipset
+      run: |
+        cd openwrt
+        make package/ipset/compile
+        
+    - name: Compile  apfree-wifidog
+      id: compile
+      run: |
+        cd openwrt
+        make diffconfig
+        make package/apfree-wifidog/compile V=s
+        echo "::set-output name=status::success"
+ 
+    - name: move target file to download
+      id: mk-dl
+      run: |
+        cd openwrt
+        mkdir -p bin/downloads
+        find bin/packages/ -name apfree-wifidog*.ipk -exec cp "{}" bin/downloads/  \;
+        cp dl/apfree-wifidog* bin/downloads/
+
+    - name: upload bin directory
+      uses: liudf0716/upload-artifact@v2.2.2
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      with:
+         name: openwrt_apfree_wifidog_dl
+         path: openwrt/bin/downloads
+
